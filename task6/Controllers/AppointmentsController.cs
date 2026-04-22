@@ -60,10 +60,24 @@ namespace APBD_TASK6.Controllers
         [HttpGet("{idAppointment:int}")]
         public async Task<IActionResult> GetAppointment([FromRoute] int idAppointment) {
             const string sql = """
-                                   SELECT IdAppointment, IdPatient, IdDoctor, AppointmentDate,
-                                          Status, Reason, InternalNotes, CreatedAt
-                                   FROM dbo.Appointments
-                                   WHERE IdAppointment = @IdAppointment;
+                               SELECT
+                                    IdAppointment,
+                                    IdPatient,
+                                    IdDoctor,
+                                    AppointmentDate,
+                                    Status,
+                                    Reason,
+                                    InternalNotes,
+                                    CreatedAt,
+                                    Email,
+                                    Phone,
+                                    LicenseNumber
+                                FROM dbo.Appointments
+                                JOIN dbo.Patients
+                                    ON dbo.Appointments.IdPatient = dbo.Patients.IdPatient
+                                JOIN dbo.Doctors
+                                    ON dbo.Appointments.IdDoctor = dbo.Doctors.IdDoctor
+                                WHERE dbo.Appointments.IdAppointment = @IdAppointment;
                                """;
 
             await using var connection = new SqlConnection(_connectionString);
@@ -100,26 +114,37 @@ namespace APBD_TASK6.Controllers
             }
             await using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
+            
+                const string checkSql = """
+                                            SELECT 1
+                                            FROM dbo.Appointments
+                                            WHERE IdDoctor = @IdDoctor
+                                            AND AppointmentDate = @AppointmentDate;
+                                        """;
+                await using var checkCommand = new SqlCommand(checkSql, connection);
+                checkCommand.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
+                checkCommand.Parameters.AddWithValue("@AppointmentDate", request.AppointmentDate);
+            
+                var exists = await checkCommand.ExecuteScalarAsync();
 
-            int newId;
+                if (exists != null) {
+                    return Conflict(new ErrorResponseDto());
+                }
 
-            await using (var transaction = (SqlTransaction)await connection.BeginTransactionAsync()) {
                 const string sql = """
-                                            INSERT INTO dbo.Appointments (IdPatient, IdDoctor, AppointmentDate, Reason)
-                                            OUTPUT INSERTED.IdAppointment
-                                            VALUES (@IdPatient, @IdDoctor, @AppointmentDate, @Reason, 'Scheduled');
-                                  """;
+                                     INSERT INTO dbo.Appointments (IdPatient, IdDoctor, AppointmentDate, Status, Reason)
+                                     OUTPUT INSERTED.IdAppointment
+                                     VALUES (@IdPatient, @IdDoctor, @AppointmentDate, 'Scheduled', @Reason);
+                                   """;
                 
-                await using var command = new SqlCommand(sql, connection, transaction);
+                await using var command = new SqlCommand(sql, connection);
                 command.Parameters.AddWithValue("@IdPatient", request.IdPatient);
                 command.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
                 command.Parameters.AddWithValue("@AppointmentDate", request.AppointmentDate);
                 command.Parameters.AddWithValue("@Reason", request.Reason);
 
-                    newId = (int)(await command.ExecuteScalarAsync())!;
-                    await transaction.CommitAsync();
-            }
-            return CreatedAtRoute(nameof(GetAppointments), new { idAppointment = newId }, null);
+                var newId = (int)(await command.ExecuteScalarAsync())!;
+            return CreatedAtRoute(nameof(GetAppointment), new { idAppointment = newId }, null);
         }
 
         [HttpPut("{idAppointment:int}")]

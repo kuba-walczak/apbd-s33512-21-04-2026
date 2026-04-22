@@ -10,6 +10,6 @@ public class CreateAppointmentRequestDto {
     [Required]
     public DateTime AppointmentDate { get; set; }
     [Required]
-    [StringLength(255, MinimumLength = 1)]
+    [StringLength(250, MinimumLength = 1)]
     public string Reason { get; set; } = string.Empty;
 }
