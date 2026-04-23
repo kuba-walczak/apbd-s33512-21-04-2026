@@ -1,4 +1,5 @@
 ﻿using APBD_TASK6.DTOs;
+using APBD_TASK6.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualBasic;
@@ -114,14 +115,40 @@ namespace APBD_TASK6.Controllers
             }
             await using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
+
+                const string checkPatientSql = """
+                                                    SELECT 1
+                                                    FROM dbo.Patients
+                                                    WHERE IdPatient = @IdPatient
+                                                      AND IsActive = 1;
+                                               """;
+                await using var checkPatientCommand = new SqlCommand(checkPatientSql, connection);
+                checkPatientCommand.Parameters.AddWithValue("@IdPatient", request.IdPatient);
+                var patientIsActive = await checkPatientCommand.ExecuteScalarAsync();
+                if (patientIsActive == null) {
+                    return BadRequest(new ErrorResponseDto());
+                }
+
+                const string checkDoctorSql = """
+                                                   SELECT 1
+                                                   FROM dbo.Doctors
+                                                   WHERE IdDoctor = @IdDoctor
+                                                     AND IsActive = 1;
+                                              """;
+                await using var checkDoctorCommand = new SqlCommand(checkDoctorSql, connection);
+                checkDoctorCommand.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
+                var doctorIsActive = await checkDoctorCommand.ExecuteScalarAsync();
+                if (doctorIsActive == null) {
+                    return BadRequest(new ErrorResponseDto());
+                }
             
-                const string checkSql = """
+                const string checkAppointmentSql = """
                                             SELECT 1
                                             FROM dbo.Appointments
                                             WHERE IdDoctor = @IdDoctor
                                             AND AppointmentDate = @AppointmentDate;
                                         """;
-                await using var checkCommand = new SqlCommand(checkSql, connection);
+                await using var checkCommand = new SqlCommand(checkAppointmentSql, connection);
                 checkCommand.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
                 checkCommand.Parameters.AddWithValue("@AppointmentDate", request.AppointmentDate);
             
@@ -148,11 +175,82 @@ namespace APBD_TASK6.Controllers
         }
 
         [HttpPut("{idAppointment:int}")]
-        public async Task<IActionResult> UpdateAppointment([FromRoute] int idAppointment, [FromBody] UpdateAppointmentRequestDTO request)
-        {
+        public async Task<IActionResult> UpdateAppointment([FromRoute] int idAppointment, [FromBody] UpdateAppointmentRequestDTO request) {
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            const string checkAppointmentSql = """
+                                               SELECT Status, AppointmentDate
+                                               FROM dbo.Appointments
+                                               WHERE IdAppointment = @IdAppointment;
+                                           """;
+
+            await using var checkAppointmentCommand = new SqlCommand(checkAppointmentSql, connection);
+            checkAppointmentCommand.Parameters.AddWithValue("@IdAppointment", idAppointment);
+
+            await using var currentAppointmentReader = await checkAppointmentCommand.ExecuteReaderAsync();
+            if (!await currentAppointmentReader.ReadAsync()) {
+                return NotFound();
+            }
+
+            var currentStatus = currentAppointmentReader.GetString(0);
+            var currentAppointmentDate = currentAppointmentReader.GetDateTime(1);
+            await currentAppointmentReader.CloseAsync();
+
+            if (currentStatus == nameof(AppointmentStatus.Completed) && currentAppointmentDate != request.AppointmentDate) {
+                return Conflict(new ErrorResponseDto());
+            }
+            
+            var checkPatientSql = """
+                                    SELECT 1
+                                    FROM dbo.Patients
+                                    WHERE IdPatient = @IdPatient
+                                     AND IsActive = 1;
+                                  """;
+            await using var checkPatientCommand = new SqlCommand(checkPatientSql, connection);
+            checkPatientCommand.Parameters.AddWithValue("@IdPatient", request.IdPatient);
+            
+            var patientReader = await checkPatientCommand.ExecuteScalarAsync();
+            if (patientReader == null) {
+                return BadRequest(new ErrorResponseDto());
+            }
+            
+            const string checkDoctorSql = """
+                                               SELECT 1
+                                               FROM dbo.Doctors
+                                               WHERE IdDoctor = @IdDoctor
+                                                 AND IsActive = 1;
+                                          """;
+            await using var checkDoctorCommand = new SqlCommand(checkDoctorSql, connection);
+            checkDoctorCommand.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
+            var doctorIsActive = await checkDoctorCommand.ExecuteScalarAsync();
+            if (doctorIsActive == null) {
+                return BadRequest(new ErrorResponseDto());
+            }
+
+            if (request.AppointmentDate != currentAppointmentDate) {
+                const string checkConflictSql = """
+                                                SELECT 1
+                                                FROM dbo.Appointments
+                                                WHERE IdDoctor = @IdDoctor
+                                                  AND AppointmentDate = @AppointmentDate
+                                                  AND IdAppointment != @IdAppointment;
+                                                """;
+                await using var checkConflictCommand = new SqlCommand(checkConflictSql, connection);
+                checkConflictCommand.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
+                checkConflictCommand.Parameters.AddWithValue("@AppointmentDate", request.AppointmentDate);
+                checkConflictCommand.Parameters.AddWithValue("@IdAppointment", idAppointment);
+
+                var hasConflict = await checkConflictCommand.ExecuteScalarAsync();
+                if (hasConflict != null) {
+                    return Conflict(new ErrorResponseDto());
+                }
+            }
+            
             var sql = """
                         UPDATE dbo.Appointments
                         SET
+                          IdPatient = @IdPatient,
                           IdDoctor = @IdDoctor,
                           AppointmentDate = @AppointmentDate,
                           Status = @Status,
@@ -162,25 +260,22 @@ namespace APBD_TASK6.Controllers
                         WHERE IdAppointment = @IdAppointment;
                       """;
             
-            await using var connection = new SqlConnection(_connectionString);
             await using var command = new SqlCommand(sql, connection);
             
             command.Parameters.AddWithValue("@IdAppointment", idAppointment);
+            command.Parameters.AddWithValue("@IdPatient", (object?)request.IdPatient ?? DBNull.Value);
             command.Parameters.AddWithValue("@IdDoctor", (object?)request.IdDoctor ?? DBNull.Value);
             command.Parameters.AddWithValue("@AppointmentDate", (object?)request.AppointmentDate ?? DBNull.Value);
-            command.Parameters.AddWithValue("@Status", (object?)request.Status ?? DBNull.Value);
+            command.Parameters.AddWithValue("@Status", request.Status.ToString());
             command.Parameters.AddWithValue("@Reason", (object?)request.Reason ?? DBNull.Value);
             command.Parameters.AddWithValue("@InternalNotes", (object?)request.InternalNotes ?? DBNull.Value);
-
-            await connection.OpenAsync();
             
             await using var reader = await command.ExecuteReaderAsync();
 
             if (!await reader.ReadAsync())
                 return NotFound();
 
-            var appointment = new AppointmentDetailsDto()
-            {
+            var appointment = new AppointmentDetailsDto {
                 IdAppointment = reader.GetInt32(0),
                 IdPatient = reader.GetInt32(1),
                 IdDoctor = reader.GetInt32(2),
@@ -199,6 +294,26 @@ namespace APBD_TASK6.Controllers
             await using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
+            const string checkStatusSql = """
+                                          SELECT Status
+                                          FROM dbo.Appointments
+                                          WHERE IdAppointment = @IdAppointment;
+                                          """;
+
+            await using var checkStatusCommand = new SqlCommand(checkStatusSql, connection);
+            checkStatusCommand.Parameters.AddWithValue("@IdAppointment", idAppointment);
+
+            await using var statusReader = await checkStatusCommand.ExecuteReaderAsync();
+            if (!await statusReader.ReadAsync()) {
+                return NotFound(new ErrorResponseDto());
+            }
+
+            var status = statusReader.GetString(0);
+            if (status == nameof(AppointmentStatus.Completed)) {
+                return Conflict(new ErrorResponseDto());
+            }
+            await statusReader.CloseAsync();
+
             const string sql = """
                                         DELETE FROM dbo.Appointments
                                         WHERE idAppointment = @IdAppointment;
@@ -206,7 +321,12 @@ namespace APBD_TASK6.Controllers
             
             await using var deleteCommand = new SqlCommand(sql, connection);
             deleteCommand.Parameters.AddWithValue("@idAppointment", idAppointment);
-            await deleteCommand.ExecuteNonQueryAsync();
+            var result = await deleteCommand.ExecuteNonQueryAsync();
+            if (result == 0) {
+                return NotFound(new ErrorResponseDto());
+            }
+            
+            
             
             return NoContent();
         }
