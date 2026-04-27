@@ -9,4 +9,7 @@ public class AppointmentDetailsDto {
     public string Reason { get; set; } = null!;
     public string? InternalNotes { get; set; }
     public DateTime CreatedAt { get; set; }
+    public string? PatientEmail { get; set; }
+    public string? PatientPhone { get; set; }
+    public string? DoctorLicenseNumber { get; set; }
 }

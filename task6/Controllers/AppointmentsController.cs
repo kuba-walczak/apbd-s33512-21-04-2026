@@ -1,5 +1,4 @@
 ﻿using APBD_TASK6.DTOs;
-using APBD_TASK6.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualBasic;
@@ -62,23 +61,23 @@ namespace APBD_TASK6.Controllers
         public async Task<IActionResult> GetAppointment([FromRoute] int idAppointment) {
             const string sql = """
                                SELECT
-                                    IdAppointment,
-                                    IdPatient,
-                                    IdDoctor,
-                                    AppointmentDate,
-                                    Status,
-                                    Reason,
-                                    InternalNotes,
-                                    CreatedAt,
-                                    Email,
-                                    Phone,
-                                    LicenseNumber
-                                FROM dbo.Appointments
-                                JOIN dbo.Patients
-                                    ON dbo.Appointments.IdPatient = dbo.Patients.IdPatient
-                                JOIN dbo.Doctors
-                                    ON dbo.Appointments.IdDoctor = dbo.Doctors.IdDoctor
-                                WHERE dbo.Appointments.IdAppointment = @IdAppointment;
+                                    a.IdAppointment,
+                                    a.IdPatient,
+                                    a.IdDoctor,
+                                    a.AppointmentDate,
+                                    a.Status,
+                                    a.Reason,
+                                    a.InternalNotes,
+                                    a.CreatedAt,
+                                    p.Email,
+                                    p.PhoneNumber,
+                                    d.LicenseNumber
+                                FROM dbo.Appointments a
+                                JOIN dbo.Patients p
+                                    ON a.IdPatient = p.IdPatient
+                                JOIN dbo.Doctors d
+                                    ON a.IdDoctor = d.IdDoctor
+                                WHERE a.IdAppointment = @IdAppointment;
                                """;
 
             await using var connection = new SqlConnection(_connectionString);
@@ -102,7 +101,10 @@ namespace APBD_TASK6.Controllers
                 Status = reader.GetString(4),
                 Reason = reader.GetString(5),
                 InternalNotes = reader.IsDBNull(6) ? null : reader.GetString(6),
-                CreatedAt = reader.GetDateTime(7)
+                CreatedAt = reader.GetDateTime(7),
+                PatientEmail = reader.IsDBNull(8) ? null : reader.GetString(8),
+                PatientPhone = reader.IsDBNull(9) ? null : reader.GetString(9),
+                DoctorLicenseNumber = reader.IsDBNull(10) ? null : reader.GetString(10)
             };
 
             return Ok(appointment);
@@ -111,7 +113,7 @@ namespace APBD_TASK6.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateAppointment([FromBody]CreateAppointmentRequestDto request) {
             if (request.AppointmentDate < DateTime.UtcNow) {
-                return BadRequest(new ErrorResponseDto());
+                return BadRequest(new ErrorResponseDto("Appointment date cannot be in the past."));
             }
             await using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
@@ -126,7 +128,7 @@ namespace APBD_TASK6.Controllers
                 checkPatientCommand.Parameters.AddWithValue("@IdPatient", request.IdPatient);
                 var patientIsActive = await checkPatientCommand.ExecuteScalarAsync();
                 if (patientIsActive == null) {
-                    return BadRequest(new ErrorResponseDto());
+                    return BadRequest(new ErrorResponseDto("Patient does not exist or is inactive."));
                 }
 
                 const string checkDoctorSql = """
@@ -139,7 +141,7 @@ namespace APBD_TASK6.Controllers
                 checkDoctorCommand.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
                 var doctorIsActive = await checkDoctorCommand.ExecuteScalarAsync();
                 if (doctorIsActive == null) {
-                    return BadRequest(new ErrorResponseDto());
+                    return BadRequest(new ErrorResponseDto("Doctor does not exist or is inactive."));
                 }
             
                 const string checkAppointmentSql = """
@@ -155,7 +157,7 @@ namespace APBD_TASK6.Controllers
                 var exists = await checkCommand.ExecuteScalarAsync();
 
                 if (exists != null) {
-                    return Conflict(new ErrorResponseDto());
+                    return Conflict(new ErrorResponseDto("Doctor already has an appointment at this time."));
                 }
 
                 const string sql = """
@@ -171,7 +173,7 @@ namespace APBD_TASK6.Controllers
                 command.Parameters.AddWithValue("@Reason", request.Reason);
 
                 var newId = (int)(await command.ExecuteScalarAsync())!;
-            return CreatedAtRoute(nameof(GetAppointment), new { idAppointment = newId }, null);
+            return CreatedAtAction(nameof(GetAppointment), new { idAppointment = newId }, null);
         }
 
         [HttpPut("{idAppointment:int}")]
@@ -197,8 +199,8 @@ namespace APBD_TASK6.Controllers
             var currentAppointmentDate = currentAppointmentReader.GetDateTime(1);
             await currentAppointmentReader.CloseAsync();
 
-            if (currentStatus == nameof(AppointmentStatus.Completed) && currentAppointmentDate != request.AppointmentDate) {
-                return Conflict(new ErrorResponseDto());
+            if (currentStatus == "Completed" && currentAppointmentDate != request.AppointmentDate) {
+                return Conflict(new ErrorResponseDto("Cannot change date of a completed appointment."));
             }
             
             var checkPatientSql = """
@@ -212,7 +214,7 @@ namespace APBD_TASK6.Controllers
             
             var patientReader = await checkPatientCommand.ExecuteScalarAsync();
             if (patientReader == null) {
-                return BadRequest(new ErrorResponseDto());
+                return BadRequest(new ErrorResponseDto("Patient does not exist or is inactive."));
             }
             
             const string checkDoctorSql = """
@@ -225,7 +227,7 @@ namespace APBD_TASK6.Controllers
             checkDoctorCommand.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
             var doctorIsActive = await checkDoctorCommand.ExecuteScalarAsync();
             if (doctorIsActive == null) {
-                return BadRequest(new ErrorResponseDto());
+                return BadRequest(new ErrorResponseDto("Doctor does not exist or is inactive."));
             }
 
             if (request.AppointmentDate != currentAppointmentDate) {
@@ -243,7 +245,7 @@ namespace APBD_TASK6.Controllers
 
                 var hasConflict = await checkConflictCommand.ExecuteScalarAsync();
                 if (hasConflict != null) {
-                    return Conflict(new ErrorResponseDto());
+                    return Conflict(new ErrorResponseDto("Doctor already has an appointment at this time."));
                 }
             }
             
@@ -266,7 +268,7 @@ namespace APBD_TASK6.Controllers
             command.Parameters.AddWithValue("@IdPatient", (object?)request.IdPatient ?? DBNull.Value);
             command.Parameters.AddWithValue("@IdDoctor", (object?)request.IdDoctor ?? DBNull.Value);
             command.Parameters.AddWithValue("@AppointmentDate", (object?)request.AppointmentDate ?? DBNull.Value);
-            command.Parameters.AddWithValue("@Status", request.Status.ToString());
+            command.Parameters.AddWithValue("@Status", request.Status);
             command.Parameters.AddWithValue("@Reason", (object?)request.Reason ?? DBNull.Value);
             command.Parameters.AddWithValue("@InternalNotes", (object?)request.InternalNotes ?? DBNull.Value);
             
@@ -305,12 +307,12 @@ namespace APBD_TASK6.Controllers
 
             await using var statusReader = await checkStatusCommand.ExecuteReaderAsync();
             if (!await statusReader.ReadAsync()) {
-                return NotFound(new ErrorResponseDto());
+                return NotFound(new ErrorResponseDto("Appointment not found."));
             }
 
             var status = statusReader.GetString(0);
-            if (status == nameof(AppointmentStatus.Completed)) {
-                return Conflict(new ErrorResponseDto());
+            if (status == "Completed") {
+                return Conflict(new ErrorResponseDto("Completed appointments cannot be deleted."));
             }
             await statusReader.CloseAsync();
 
@@ -323,7 +325,7 @@ namespace APBD_TASK6.Controllers
             deleteCommand.Parameters.AddWithValue("@idAppointment", idAppointment);
             var result = await deleteCommand.ExecuteNonQueryAsync();
             if (result == 0) {
-                return NotFound(new ErrorResponseDto());
+                return NotFound(new ErrorResponseDto("Appointment not found."));
             }
             
             
