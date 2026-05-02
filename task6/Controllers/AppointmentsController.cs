@@ -6,7 +6,7 @@ using Microsoft.VisualBasic;
 namespace APBD_TASK6.Controllers
 {
     [ApiController]
-    [Route("api/[controller]")]
+    [Route("api/appointments")]
     public class AppointmentsController : ControllerBase {
         private readonly string _connectionString;
         
